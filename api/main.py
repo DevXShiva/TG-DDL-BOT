@@ -87,16 +87,26 @@ def download_file(uid):
     )
 
 # --- Background Bot Runner ---
+# --- Background Bot Runner ---
 def run_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    # Create TTL Index for Mongo
+    
+    # MongoDB TTL Index create karein
     loop.run_until_complete(links_col.create_index("createdAt", expireAfterSeconds=600))
-    bot.run()
+    
+    # bot.run() ki jagah bot.start() use karein (Signals error fix)
+    loop.run_until_complete(bot.start())
+    print("✅ Bot Started Successfully!")
+    
+    # Loop ko chalte rehne dein
+    loop.run_forever()
 
 if __name__ == '__main__':
-    # Bot ko alag thread mein chalana taaki Flask block na ho
-    threading.Thread(target=run_bot, daemon=True).start()
-    # Port Render handle karega
-    port = int(os.environ.get("PORT", 8080))
+    # Bot ko background thread mein start karein
+    t = threading.Thread(target=run_bot, daemon=True)
+    t.start()
+    
+    # Flask ko main thread mein chalne dein
+    port = int(os.environ.get("PORT", 10000)) # Render uses 10000 by default
     app.run(host='0.0.0.0', port=port)
