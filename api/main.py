@@ -95,11 +95,10 @@ def run_bot():
     # MongoDB TTL Index create karein
     loop.run_until_complete(links_col.create_index("createdAt", expireAfterSeconds=600))
     
-    # bot.run() ki jagah bot.start() use karein (Signals error fix)
-    loop.run_until_complete(bot.start())
-    print("✅ Bot Started Successfully!")
+    # DHAYAN DEIN: bot.start() ke baad parentheses () lagana hai
+    loop.run_until_complete(bot.start()) 
     
-    # Loop ko chalte rehne dein
+    print("✅ Bot Started Successfully!")
     loop.run_forever()
 
 if __name__ == '__main__':
@@ -110,3 +109,4 @@ if __name__ == '__main__':
     # Flask ko main thread mein chalne dein
     port = int(os.environ.get("PORT", 10000)) # Render uses 10000 by default
     app.run(host='0.0.0.0', port=port)
+
