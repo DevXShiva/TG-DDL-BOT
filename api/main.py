@@ -1,11 +1,11 @@
 import os
 import uuid
 import datetime
+import asyncio
+import threading
 from flask import Flask, Response, request, jsonify
 from pyrogram import Client, filters
 from motor.motor_asyncio import AsyncIOMotorClient
-import asyncio
-import threading
 
 # --- Configurations ---
 API_ID = int(os.getenv("API_ID"))
@@ -22,32 +22,63 @@ mongo_client = AsyncIOMotorClient(MONGO_URL)
 db = mongo_client["tg_bot_db"]
 links_col = db["links"]
 
+# --- Helper Function: File Size Readable ---
+def get_readable_size(size_in_bytes):
+    if size_in_bytes is None: return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_in_bytes < 1024:
+            return f"{size_in_bytes:.2f} {unit}"
+        size_in_bytes /= 1024
+
 # --- Bot Handlers ---
-@bot.on_message(filters.document | filters.video)
+
+# 1. Start Command Handler
+@bot.on_message(filters.command("start") & filters.private)
+async def start_handler(client, message):
+    welcome_text = (
+        f"<b>Hi {message.from_user.mention}! 👋</b>\n\n"
+        "Main ek <b>Direct Download Link Generator</b> bot hoon.\n\n"
+        "🔹 Mujhe koi bhi File ya Video bhejo.\n"
+        "🔹 Main aapko ek High-Speed direct link doonga.\n"
+        "🔹 Link <b>10 minute</b> mein expire ho jayega.\n\n"
+        "<i>Powered by @YourChannelName</i>"
+    )
+    await message.reply_text(welcome_text, parse_mode="html")
+
+# 2. Media Handler (Video/Document)
+@bot.on_message((filters.document | filters.video) & filters.private)
 async def handle_media(client, message):
     media = message.document or message.video
     file_id = media.file_id
     file_name = media.file_name or "video.mp4"
+    file_size = get_readable_size(media.file_size)
     unique_id = str(uuid.uuid4())[:10]
 
-    # Save to Mongo with TTL (10 min expiry)
+    # Save to Mongo with TTL
     await links_col.insert_one({
         "_id": unique_id,
         "file_id": file_id,
         "file_name": file_name,
-        "createdAt": datetime.datetime.utcnow()
+        "createdAt": datetime.datetime.utcnow() 
     })
 
     # Render URL logic
-    host_url = request.host_url.rstrip('/')
+    host_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not host_url:
+        host_url = request.host_url.rstrip('/')
+    
     dl_link = f"{host_url}/download/{unique_id}"
     
-    await message.reply_text(
-        f"<b>🚀 Fast Download Link:</b>\n\n<code>{dl_link}</code>\n\n"
-        f"<b>⏰ Expiry:</b> 10 Minutes\n"
-        f"<i>Note: Direct download works with IDM/1DM.</i>",
-        parse_mode="html"
+    response_text = (
+        f"<b>✅ File Ready to Download!</b>\n\n"
+        f"<b>📄 Name:</b> <code>{file_name}</code>\n"
+        f"<b>⚖️ Size:</b> {file_size}\n"
+        f"<b>⏰ Expiry:</b> 10 Minutes\n\n"
+        f"<b>🔗 Link:</b> <code>{dl_link}</code>\n\n"
+        f"<i>Tip: Use IDM for maximum speed! 🚀</i>"
     )
+    
+    await message.reply_text(response_text, parse_mode="html")
 
 # --- Flask Endpoints ---
 @app.route('/')
@@ -56,28 +87,28 @@ def home():
 
 @app.route('/download/<uid>')
 def download_file(uid):
-    # Flask ke andar async function ko run karne ka tarika
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
     data = loop.run_until_complete(links_col.find_one({"_id": uid}))
     
     if not data:
-        return "Link Expired or Invalid!", 404
+        return "<h1>Error 404: Link Expired or Invalid!</h1><p>Please generate a new link from the bot.</p>", 404
 
     def generate():
-        # Async generator ko synchronous stream mein convert karna
         async def stream():
             async for chunk in bot.stream_media(data['file_id']):
                 yield chunk
         
-        # Data chunks ko stream karna
         g = stream()
         while True:
             try:
                 chunk = loop.run_until_complete(g.__anext__())
                 yield chunk
             except StopAsyncIteration:
+                break
+            except Exception as e:
+                print(f"Streaming Error: {e}")
                 break
 
     return Response(
@@ -87,26 +118,23 @@ def download_file(uid):
     )
 
 # --- Background Bot Runner ---
-# --- Background Bot Runner ---
+async def start_bot_async():
+    try:
+        await links_col.create_index("createdAt", expireAfterSeconds=600)
+        await bot.start()
+        print("✅ Bot Started Successfully!")
+    except Exception as e:
+        print(f"❌ Failed to start bot: {e}")
+
 def run_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    # MongoDB TTL Index create karein
-    loop.run_until_complete(links_col.create_index("createdAt", expireAfterSeconds=600))
-    
-    # DHAYAN DEIN: bot.start() ke baad parentheses () lagana hai
-    loop.run_until_complete(bot.start()) 
-    
-    print("✅ Bot Started Successfully!")
+    loop.run_until_complete(start_bot_async())
     loop.run_forever()
 
 if __name__ == '__main__':
-    # Bot ko background thread mein start karein
     t = threading.Thread(target=run_bot, daemon=True)
     t.start()
     
-    # Flask ko main thread mein chalne dein
-    port = int(os.environ.get("PORT", 10000)) # Render uses 10000 by default
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
-
